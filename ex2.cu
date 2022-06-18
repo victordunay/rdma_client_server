@@ -200,14 +200,14 @@ class shared_queue
 private:
 
     //queue data
+    cuda::atomic<int> _head;
+    cuda::atomic<int> _tail;
     size_t queue_size;
 
     //queue of jobs;
     Job* jobs;
 
     //queue sync variables
-    cuda::atomic<int> _head;
-    cuda::atomic<int> _tail;
 
 public:
        
