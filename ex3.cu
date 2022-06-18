@@ -1,7 +1,7 @@
 /* CUDA 10.2 has a bug that prevents including <cuda/atomic> from two separate
  * object files. As a workaround, we include ex2.cu directly here. */
 #include "ex2.cu"
-
+#include "common.cu"
 #include <cassert>
 
 #include <sys/types.h>
@@ -10,6 +10,9 @@
 #include <arpa/inet.h>
 
 #include <infiniband/verbs.h>
+#include <string.h>
+#include <unistd.h>
+
 
 class server_rpc_context : public rdma_server_context {
 private:
@@ -39,16 +42,19 @@ public:
 
         bool terminate = false, got_last_cqe = false;
 
-        while (!terminate || !got_last_cqe) {
+        while (!terminate || !got_last_cqe) 
+        {
             // Step 1: Poll for CQE
             struct ibv_wc wc;
             int ncqes = ibv_poll_cq(cq, 1, &wc);
-            if (ncqes < 0) {
+            if (ncqes < 0) 
+            {
                 perror("ibv_poll_cq() failed");
                 exit(1);
             }
-            if (ncqes > 0) {
-		        VERBS_WC_CHECK(wc);
+            if (ncqes > 0) 
+            {
+		    VERBS_WC_CHECK(wc);
 
                 switch (wc.opcode) {
                 case IBV_WC_RECV:
@@ -117,6 +123,11 @@ send_rdma_write:
         }
     }
 };
+
+
+
+
+
 
 class client_rpc_context : public rdma_client_context {
 private:
@@ -247,42 +258,172 @@ public:
     }
 };
 
-class server_queues_context : public rdma_server_context {
+
+/********************************************************************************/
+/*                                initial data transfer                         */
+/********************************************************************************/
+
+struct transfer
+{
+    uint32_t img_in_rkey
+    uint64_t img_in_addr;
+    uint32_t img_out_rkey
+    uint64_t img_out_addr;
+
+
+    uint32_t ctg_queue_rkey;
+    uint32_t ctg_queue_addr;
+    uint32_t gtc_queue_rkey;
+    uint32_t gtc_queue_addr;
+
+    //uint32_t producer_index_rkey; //ctg_head
+    //uint32_t producer_index_addr; //ctg_head
+
+    //int number_of_slots;
+}
+
+/********************************************************************************/
+/*                                server side                         */
+/********************************************************************************/
+
+class server_queues_context : public rdma_server_context 
+{
 private:
-    std::unique_ptr<image_processing_server> server;
+    std::unique_ptr<queue_server> server;
 
     /* TODO: add memory region(s) for CPU-GPU queues */
+    
+    struct ibv_pd *pd_gpu_to_cpu_q;
+    struct ibv_mr *mr_gpu_to_cpu_q;
+
+    struct ibv_pd *pd_cpu_to_gpu_q;
+    struct ibv_mr *mr_cpu_to_gpu_q;
+
+   
 
 public:
     explicit server_queues_context(uint16_t tcp_port) : rdma_server_context(tcp_port)
     {
         /* TODO Initialize additional server MRs as needed. */
+        struct rdma_server_info_t
+        { 
+            int cpu_to_gpu_rkey;
+            int gpu_to_cpu_rkey;
+            int length;
+            int num_of_slots;
+            uint64_t cpu_to_gpu_addr;
+            uint64_t gpu_to_cpu_addr;
+        } rdma_server_info;
+
+        memset(&rdma_server_info, 0, sizeof(rdma_server_info));
+
+        mr_gpu_to_cpu_q = ibv_reg_mr(pd_gpu_to_cpu_q, server->gpu_to_cpu_q, sizeof(shared_queue), IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
+        if (!mr_gpu_to_cpu_q) 
+        {
+            fprintf(stderr, "Error, ibv_reg_mr() failed\n");
+            exit(1);
+        }
+
+        mr_cpu_to_gpu_q = ibv_reg_mr(pd_cpu_to_gpu_q, server->cpu_to_gpu_q, sizeof(shared_queue), IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
+        if (!mr_gpu_to_cpu_q) 
+        {
+            fprintf(stderr, "Error, ibv_reg_mr() failed\n");
+            exit(1);
+        }
+
+        rdma_server_info.cpu_to_gpu_rkey = mr_cpu_to_gpu_q->rkey;
+        rdma_server_info.gpu_to_cpu_rkey = mr_gpu_to_cpu_q->rkey;
+        rdma_server_info.length = sizeof(shared_queue);
+        rdma_server_info.cpu_to_gpu_addr = (uint64_t)server->cpu_to_gpu_q;
+        rdma_server_info.gpu_to_cpu_addr = (uint64_t)server->gpu_to_cpu_q;
+        rdma_server_info.num_of_slots = server->num_of_slots;
+
 
         /* TODO Exchange rkeys, addresses, and necessary information (e.g.
          * number of queues) with the client */
+
+        int result = -1;
+        result = send(socket_fd, &rdma_server_info, sizeof(rdma_server_info), 0);
+        if (result < 0) 
+        {
+            fprintf(stderr, "Error, exchange failed\n");
+            exit(1);
+        }
     }
 
     ~server_queues_context()
     {
         /* TODO destroy the additional server MRs here */
+        ibv_dereg_mr(mr_cpu_to_gpu_q);
+        ibv_dereg_mr(mr_gpu_to_cpu_q);
+
     }
 
-    virtual void event_loop() override
+    void event_loop() override
     {
         /* TODO simplified version of server_rpc_context::event_loop. As the
          * client use one sided operations, we only need one kind of message to
          * terminate the server at the end. */
-    }
+        rpc_request* req;
+        bool terminate = false;
+
+        while (!terminate) 
+        {
+            // Step 1: Poll for CQE
+            struct ibv_wc wc;
+            int ncqes = ibv_poll_cq(cq, 1, &wc);
+
+            if (ncqes < 0) 
+            {
+                perror("ibv_poll_cq() failed");
+                exit(1);
+            }
+
+            if (ncqes > 0) 
+            {
+		        VERBS_WC_CHECK(wc);
+
+                switch (wc.opcode) 
+                {
+                    case IBV_WC_RECV:
+                        /* Received a new request from the client */
+                        req = &requests[wc.wr_id];
+
+                        /* Terminate signal */
+                        if (req->request_id == -1)
+                        {
+                            printf("Terminating...\n");
+                            terminate = true;
+                        }
+                    break;
+                }
+            }
+        }
+    };
 };
+
+
+/********************************************************************************/
+/*                                client side                      */
+/********************************************************************************/
 
 class client_queues_context : public rdma_client_context {
 private:
     /* TODO add necessary context to track the client side of the GPU's
      * producer/consumer queues */
+    uint32_t requests_sent = 0;
+    uint32_t send_cqes_received = 0;
+    uint32_t ctg_index = 0;
+    uint32_t gtc_index = 0;
+    
 
     struct ibv_mr *mr_images_in; /* Memory region for input images */
     struct ibv_mr *mr_images_out; /* Memory region for output images */
+   
     /* TODO define other memory regions used by the client here */
+    struct ibv_mr *ctg_queue;
+    struct ibv_mr *gtc_queue;
+ 
 
 public:
     client_queues_context(uint16_t tcp_port) : rdma_client_context(tcp_port)
@@ -290,21 +431,33 @@ public:
         /* TODO communicate with server to discover number of queues, necessary
          * rkeys / address, or other additional information needed to operate
          * the GPU queues remotely. */
+         send_over_socket and recv_over_socket
     }
 
     ~client_queues_context()
     {
 	/* TODO terminate the server and release memory regions and other resources */
+        kill();
     }
 
     virtual void set_input_images(uchar *images_in, size_t bytes) override
     {
-        // TODO register memory
+        /* register a memory region for the input images. */
+        mr_images_in = ibv_reg_mr(pd, images_in, bytes, IBV_ACCESS_REMOTE_READ);
+        if (!mr_images_in) {
+            perror("ibv_reg_mr() failed for input images");
+            exit(1);
+        }
     }
 
     virtual void set_output_images(uchar *images_out, size_t bytes) override
     {
-        // TODO register memory
+        /* register a memory region for the output images. */
+        mr_images_out = ibv_reg_mr(pd, images_out, bytes, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+        if (!mr_images_out) {
+            perror("ibv_reg_mr() failed for output images");
+            exit(1);
+        }
     }
 
     virtual bool enqueue(int img_id, uchar *img_in, uchar *img_out) override
@@ -319,6 +472,17 @@ public:
         /* TODO use RDMA Write and RDMA Read operations to detect the completion and dequeue a processed image
          * through a CPU-GPU producer consumer queue running on the server. */
         return false;
+    }
+
+    void kill()
+    {
+        while (!enqueue(-1, // Indicate termination
+                       NULL, NULL)) ;
+        int img_id = 0;
+        bool dequeued;
+        do {
+            dequeued = dequeue(&img_id);
+        } while (!dequeued || img_id != -1);
     }
 };
 
