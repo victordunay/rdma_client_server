@@ -48,7 +48,7 @@ public:
                 exit(1);
             }
             if (ncqes > 0) {
-		VERBS_WC_CHECK(wc);
+		        VERBS_WC_CHECK(wc);
 
                 switch (wc.opcode) {
                 case IBV_WC_RECV:
@@ -105,7 +105,7 @@ public:
 
 send_rdma_write:
                 // Step 4: Send RDMA Write with immediate to client with the response
-		post_rdma_write(
+		        post_rdma_write(
                     req->output_addr,                       // remote_dst
                     terminate ? 0 : req->output_length,     // len
                     req->output_rkey,                       // rkey
@@ -215,7 +215,7 @@ public:
         if (ncqes == 0)
             return false;
 
-	VERBS_WC_CHECK(wc);
+	    VERBS_WC_CHECK(wc);
 
         switch (wc.opcode) {
         case IBV_WC_SEND:
