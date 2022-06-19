@@ -109,7 +109,7 @@ public:
                 req = &requests[dequeued_img_id];
                 img_out = &images_out[dequeued_img_id * IMG_SZ];
 
-                //send_rdma_write:
+send_rdma_write:
                 // Step 4: Send RDMA Write with immediate to client with the response
 		        post_rdma_write(
                     req->output_addr,                       // remote_dst
@@ -265,9 +265,9 @@ public:
 
 struct rdma_server_remote_access
 {
-    uint32_t img_in_rkey
+    uint32_t img_in_rkey;
     uint64_t img_in_addr;
-    uint32_t img_out_rkey
+    uint32_t img_out_rkey;
     uint64_t img_out_addr;
 
 
@@ -286,7 +286,7 @@ struct rdma_server_remote_access
 
     int number_of_slots;
 
-}
+};
 
 struct rdma_server_remote_index
 {
@@ -294,7 +294,7 @@ struct rdma_server_remote_index
     int ctg_tail;
     int gtc_head;
     int gtc_tail;
-}
+};
 
 int job_size = sizeof(Job);
 int atomic_int_size = sizeof(cuda::atomic<int>);
@@ -328,8 +328,8 @@ public:
         struct rdma_server_remote_access rdma_server_info;
         memset(&rdma_server_info, 0, sizeof(rdma_server_info));
 
-        gpu_to_cpu_q = server->gpu_to_cpu_q;
-        cpu_to_gpu_q = server->cpu_to_gpu_q;
+        shared_queue *gpu_to_cpu_q = server->gpu_to_cpu_q;
+        shared_queue *cpu_to_gpu_q = server->cpu_to_gpu_q;
 
 
 
@@ -361,10 +361,10 @@ public:
 
         rdma_server_info.gtc_queue_rkey = mr_gpu_to_cpu_q->rkey;
         rdma_server_info.gtc_queue_addr = (uintptr_t)gpu_to_cpu_q->jobs;
-        rdma_server_info.ctg_head_addr = (uintptr_t)&cpu_to_gpu_q->_head;
-        rdma_server_info.ctg_tail_addr = (uintptr_t)&cpu_to_gpu_q->_tail;
+        rdma_server_info.gtg_head_addr = (uintptr_t)&gpu_to_cpu_q->_head;
+        rdma_server_info.gtg_tail_addr = (uintptr_t)&gpu_to_cpu_q->_tail;
 
-        rdma_server_info.num_of_slots = server->num_of_slots;
+        rdma_server_info.number_of_slots = server->num_of_slots;
          //rdma_server_info.length = sizeof(shared_queue);
 
 
@@ -460,7 +460,7 @@ private:
     struct rdma_server_remote_access remote_info;
     
     struct rdma_server_remote_index indexes;
-    struct ibv_me *mr_indexes;
+    struct ibv_mr *mr_indexes;
  
 
 public:
@@ -485,10 +485,10 @@ public:
     void initialize_job_pointers()
     {
         //initialize the vector of jobs with the size of the queue.
-        sending_jobs = std::vector<Job>(remote_info.num_of_slots,{0,0,0});
+        sending_jobs = std::vector<Job>(remote_info.number_of_slots,{0,0,0});
 
         //Adding memory regions
-        mr_sending_jobs = ibv_reg_mr(pd, sending_jobs.begin(), sizeof(Job) * remote_info.num_of_slots , IBV_ACCESS_LOCAL_READ);
+        mr_sending_jobs = ibv_reg_mr(pd, sending_jobs.begin(), sizeof(Job) * remote_info.number_of_slots ,IBV_ACCESS_LOCAL_WRITE);
         if (!mr_sending_jobs) {
             perror("ibv_reg_mr() failed for job queue");
             exit(1);
@@ -502,7 +502,7 @@ public:
 
     void initialize_index_pointers()
     {
-        mr_indexes = ibv_reg_mr(pd, &indexes, sizeof(indexes) , IBV_ACCESS_LOCAL_READ|IBV_ACCESS_LOCAL_WRITE);
+        mr_indexes = ibv_reg_mr(pd, &indexes, sizeof(indexes) ,IBV_ACCESS_LOCAL_WRITE);
         if (!mr_indexes) {
             perror("ibv_reg_mr() failed for indexes");
             exit(1);
@@ -512,7 +512,7 @@ public:
     virtual void set_input_images(uchar *images_in, size_t bytes) override
     {
         /* register a memory region for the input images. */
-        mr_images_in = ibv_reg_mr(pd, images_in, bytes, IBV_ACCESS_LOCAL_READ);
+        mr_images_in = ibv_reg_mr(pd, images_in, bytes,IBV_ACCESS_LOCAL_WRITE);
         if (!mr_images_in) {
             perror("ibv_reg_mr() failed for input images");
             exit(1);
@@ -522,7 +522,7 @@ public:
     virtual void set_output_images(uchar *images_out, size_t bytes) override
     {
         /* register a memory region for the output images. */
-        mr_images_out = ibv_reg_mr(pd, images_out, bytes, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_LOCAL_READ);
+        mr_images_out = ibv_reg_mr(pd, images_out, bytes, IBV_ACCESS_LOCAL_WRITE);
         if (!mr_images_out) {
             perror("ibv_reg_mr() failed for output images");
             exit(1);
