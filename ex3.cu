@@ -285,7 +285,14 @@ struct rdma_server_remote_access
     //uint32_t producer_index_addr; //ctg_head
 
     int number_of_slots;
+
+}
+
+struct rdma_server_remote_index
+{
     int ctg_head;
+    int ctg_tail;
+    int gtc_head;
     int gtc_tail;
 }
 
@@ -358,18 +365,21 @@ public:
         rdma_server_info.ctg_tail_addr = (uintptr_t)&cpu_to_gpu_q->_tail;
 
         rdma_server_info.num_of_slots = server->num_of_slots;
-
-        rdma_server_info.ctg_head = cpu_to_gpu_q->_head;
-        rdma_server_info.gtc_tail = gpu_to_cpu_q->_tail;
-
-        //rdma_server_info.length = sizeof(shared_queue);
-
-
+         //rdma_server_info.length = sizeof(shared_queue);
 
 
         /* TODO Exchange rkeys, addresses, and necessary information (e.g.
          * number of queues) with the client */
         send_over_socket(&rdma_server_info, sizeof(rdma_server_info));
+
+        struct rdma_server_remote_index queue_indexes;
+
+        queue_indexes.ctg_head = cpu_to_gpu_q->_head;
+        queue_indexes.ctg_tail = cpu_to_gpu_q->_tail;
+        queue_indexes.gtc_head = gpu_to_cpu_q->_head;
+        queue_indexes.gtc_tail = gpu_to_cpu_q->_tail;
+
+        send_over_socket(&queue_indexes, sizeof(queue_indexes));
 
     }
 
@@ -448,6 +458,9 @@ private:
    
     /* TODO define other memory regions used by the client here */
     struct rdma_server_remote_access remote_info;
+    
+    struct rdma_server_remote_index indexes;
+    struct ibv_me *mr_indexes;
  
 
 public:
@@ -458,7 +471,8 @@ public:
          * the GPU queues remotely. */
         recv_over_socket(&remote_info, sizeof(remote_info));
         initialize_job_pointers();
-
+        recv_over_socket(&indexes, sizeof(indexes));
+        initialize_index_pointers();
     }
 
     ~client_queues_context()
@@ -482,6 +496,15 @@ public:
         mr_recieved_job = ibv_reg_mr(pd, &recieved_job, sizeof(Job), IBV_ACCESS_LOCAL_WRITE);
         if (!mr_recieved_job) {
             perror("ibv_reg_mr() failed for recieved_job");
+            exit(1);
+        }
+    }
+
+    void initialize_index_pointers()
+    {
+        mr_indexes = ibv_reg_mr(pd, &indexes, sizeof(indexes) , IBV_ACCESS_LOCAL_READ|IBV_ACCESS_LOCAL_WRITE);
+        if (!mr_indexes) {
+            perror("ibv_reg_mr() failed for indexes");
             exit(1);
         }
     }
@@ -510,6 +533,17 @@ public:
     {
         /* TODO use RDMA Write and RDMA Read operations to enqueue the task on
          * a CPU-GPU producer consumer queue running on the server. */
+        
+        //reading _tail from remote
+        post_rdma_read(
+            indexes.ctg_tail,   // local_dst
+            atomic_int_size,    // len
+            mr_indexes->lkey,   // lkey
+            remote_info->ctg_tail_addr,    // remote_src
+            remote_info->ctg_queue_rkey,    // rkey
+            1);          // wr_id
+
+        Job enqueue_job = {img_id,img_in,img_out};
         return false;
     }
 
