@@ -200,16 +200,15 @@ class shared_queue
 private:
 
     //queue data
+    size_t queue_size;
+    
+    
+public:
+    //queue sync variables
     cuda::atomic<int> _head;
     cuda::atomic<int> _tail;
-    size_t queue_size;
-
     //queue of jobs;
     Job* jobs;
-
-    //queue sync variables
-
-public:
        
     /**
     * @brief enqueue an image by a job and adding it to the queue (if not full). sending -1 by the cpu is for terminate the kernel
