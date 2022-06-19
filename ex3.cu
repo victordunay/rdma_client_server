@@ -355,14 +355,14 @@ public:
 
         rdma_server_info.ctg_queue_rkey = mr_cpu_to_gpu_q->rkey;
         rdma_server_info.ctg_queue_addr = (uintptr_t)cpu_to_gpu_q->jobs;
-        rdma_server_info.ctg_head_addr = (uintptr_t)&cpu_to_gpu_q->_head;
-        rdma_server_info.ctg_tail_addr = (uintptr_t)&cpu_to_gpu_q->_tail;
+        rdma_server_info.ctg_head_addr = &((uintptr_t)cpu_to_gpu_q->_head);
+        rdma_server_info.ctg_tail_addr = &((uintptr_t)cpu_to_gpu_q->_tail);
 
 
         rdma_server_info.gtc_queue_rkey = mr_gpu_to_cpu_q->rkey;
         rdma_server_info.gtc_queue_addr = (uintptr_t)gpu_to_cpu_q->jobs;
-        rdma_server_info.gtg_head_addr = (uintptr_t)&gpu_to_cpu_q->_head;
-        rdma_server_info.gtg_tail_addr = (uintptr_t)&gpu_to_cpu_q->_tail;
+        rdma_server_info.gtg_head_addr = &((uintptr_t)gpu_to_cpu_q->_head);
+        rdma_server_info.gtg_tail_addr = &((uintptr_t)gpu_to_cpu_q->_tail);
 
         rdma_server_info.number_of_slots = server->num_of_slots;
          //rdma_server_info.length = sizeof(shared_queue);
@@ -535,14 +535,43 @@ public:
          * a CPU-GPU producer consumer queue running on the server. */
         
         //reading _tail from remote
-        post_rdma_read(
-            indexes.ctg_tail,   // local_dst
+        readIndex(
+            &indexes.ctg_tail,   // local_dst
             atomic_int_size,    // len
-            mr_indexes->lkey,   // lkey
             remote_info->ctg_tail_addr,    // remote_src
             remote_info->ctg_queue_rkey,    // rkey
-            1);          // wr_id
+            indexes.ctg_tail);          // wr_id
+        
+        //checks if queue is full
+        if(indexes.ctg_tail - indexes.ctg_head == remote_info->number_of_slots)
+            return false;
 
+                
+        Job enqueue_job = {img_id,img_in,img_out};
+        return false;
+    }
+
+    void readIndex(void *local_dst, uint32_t len, 
+        uint64_t remote_src, uint32_t rkey, uint64_t wr_id)
+    {
+        post_rdma_read(local_dst, len, mr_indexes->lkey,remote_src,rkey,wr_id);          // wr_id
+        //check for CQE
+        struct ibv_wc wc;
+        do{
+            int ncqes = ibv_poll_cq(cq, 1, &wc);
+        }while(ncqes == 0);
+
+        if (ncqes < 0) 
+        {
+            perror("ibv_poll_cq() failed");
+            exit(1);
+        }
+        VERBS_WC_CHECK(wc);
+        if(wc.opcode != IBV_WC_RDMA_READ)
+        {
+            perror("read index failed");
+            exit(1);
+        }
         Job enqueue_job = {img_id,img_in,img_out};
         return false;
     }
