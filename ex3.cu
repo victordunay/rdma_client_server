@@ -558,6 +558,34 @@ public:
         return true;
     }
 
+    virtual bool dequeue(int *img_id) override
+    {
+        /* TODO use RDMA Write and RDMA Read operations to detect the completion and dequeue a processed image
+         * through a CPU-GPU producer consumer queue running on the server. */
+        //reading _tail from remote
+
+        readIndex(false);          // wr_id
+        
+        //checks if queue is full
+        if(indexes.gtc_tail == indexes.gtc_head)
+            return false;
+
+        //dequeue a job and save it in recieved_job
+        dequeueJob()
+        *img_id = recieved_job.img_id;
+
+        //copy img
+
+        
+
+        //increase _tail index
+        updateIndex(false);
+
+        return true;
+    }
+
+
+
     /**
      * @brief reading a index from queue (_tail from cpu_to_gpu_q or _head from gpu_to_cpu_q)
      * 
@@ -607,7 +635,31 @@ public:
      */
     void updateIndex(bool head) // need to implement
     {
-        post_rdma_write(local_dst, len, mr_indexes->lkey,remote_src,rkey,wr_id); 
+        if(head)
+        {
+            indexes.ctg_head++;
+            void * local_src = &indexes.ctg_head;
+            uint64_t remote_dst = remote_info->ctg_head_addr;    // remote_src
+            uint32_t rkey = remote_info->ctg_queue_rkey;    // rkey
+            uint64_t wr_id = indexes.ctg_head;
+        }
+        else
+        {
+            indexes.gtc_tail++;
+            void * local_src = &indexes.gtc_tail;
+            uint64_t remote_dst = remote_info->gtc_tail_addr;    // remote_src
+            uint32_t rkey = remote_info->gtc_queue_rkey;    // rkey
+            uint64_t wr_id = indexes.gtc_tail;
+        }
+
+        post_rdma_write(
+            remote_dst,                        // remote_dst
+            atomic_int_size,                   // len
+            rkey,                              // rkey
+            local_src,                         // local_src
+            mr_indexes->lkey,                  // lkey
+            wr_id,                             // wr_id
+            nullptr);  
         //check for CQE
         struct ibv_wc wc;
         do{
@@ -622,7 +674,7 @@ public:
         VERBS_WC_CHECK(wc);
         if(wc.opcode != IBV_WC_RDMA_READ)
         {
-            perror("read index failed");
+            perror("write index failed");
             exit(1);
         }
     }
@@ -688,14 +740,14 @@ public:
         Job * remote_job = (Job *)remote_info->ctg_queue_addr;
         uint64_t remote_job_addr = &remote_job[index];
         post_rdma_write(
-            remote_job_addr,                                    // remote_dst
-            sizeof(Job),                            // len
+            remote_job_addr,                        // remote_dst
+            job_size,                               // len
             remote_info->ctg_queue_rkey,            // rkey
             (uintptr_t)job,                         // local_src
-            mr_sending_jobs->lkey,                     // lkey
+            mr_sending_jobs->lkey,                  // lkey
             index,                                  // wr_id
             nullptr); 
-            
+
         struct ibv_wc wc;
         
         do{
@@ -721,12 +773,6 @@ public:
 
     }
 
-    virtual bool dequeue(int *img_id) override
-    {
-        /* TODO use RDMA Write and RDMA Read operations to detect the completion and dequeue a processed image
-         * through a CPU-GPU producer consumer queue running on the server. */
-        return false;
-    }
 
     void kill()
     {
