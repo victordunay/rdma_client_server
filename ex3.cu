@@ -535,12 +535,7 @@ public:
          * a CPU-GPU producer consumer queue running on the server. */
         
         //reading _tail from remote
-        readIndex(
-            &indexes.ctg_tail,   // local_dst
-            atomic_int_size,    // len
-            remote_info->ctg_tail_addr,    // remote_src
-            remote_info->ctg_queue_rkey,    // rkey
-            indexes.ctg_tail);          // wr_id
+        readIndex(true);          // wr_id
         
         //checks if queue is full
         if(indexes.ctg_tail - indexes.ctg_head == remote_info->number_of_slots)
@@ -555,18 +550,37 @@ public:
         sending_jobs[indexes.ctg_head] = {img_id,img_in,img_out};
 
         //insert job to queue
-
+        enqueueJob(indexes.ctg_head, &sending_jobs[indexes.ctg_head]);
 
         //increase _head index
-
+        updateIndex(true);
 
         return true;
     }
 
-    void readIndex(void *local_dst, uint32_t len, 
-        uint64_t remote_src, uint32_t rkey, uint64_t wr_id)
+    /**
+     * @brief reading a index from queue (_tail from cpu_to_gpu_q or _head from gpu_to_cpu_q)
+     * 
+     * @param bool tail  true to read the tail, false for head
+     */
+    void readIndex(bool tail)
     {
-        post_rdma_read(local_dst, len, mr_indexes->lkey,remote_src,rkey,wr_id); 
+        if(tail)
+        {
+            void *local_dst = &indexes.ctg_tail;
+            uint64_t remote_src = remote_info->ctg_tail_addr;    // remote_src
+            uint32_t rkey = remote_info->ctg_queue_rkey;    // rkey
+            uint64_t wr_id = indexes.ctg_tail;
+        }
+        else
+        {
+            void *local_dst = &indexes.gtc_head;
+            uint64_t remote_src = remote_info->gtc_head_addr;    // remote_src
+            uint32_t rkey = remote_info->gtc_queue_rkey;    // rkey
+            uint64_t wr_id = indexes.gtc_head;
+        }
+
+        post_rdma_read(local_dst, atomic_int_size, mr_indexes->lkey,remote_src,rkey,wr_id); 
         //check for CQE
         struct ibv_wc wc;
         do{
@@ -586,16 +600,50 @@ public:
         }
     }
 
+    /**
+     * @brief updating to new index (current +1) (_head from cpu_to_gpu_q or _tail from gpu_to_cpu_q)
+     * 
+     * @param head 
+     */
+    void updateIndex(bool head) // need to implement
+    {
+        post_rdma_write(local_dst, len, mr_indexes->lkey,remote_src,rkey,wr_id); 
+        //check for CQE
+        struct ibv_wc wc;
+        do{
+            int ncqes = ibv_poll_cq(cq, 1, &wc);
+        }while(ncqes == 0);
+
+        if (ncqes < 0) 
+        {
+            perror("ibv_poll_cq() failed");
+            exit(1);
+        }
+        VERBS_WC_CHECK(wc);
+        if(wc.opcode != IBV_WC_RDMA_READ)
+        {
+            perror("read index failed");
+            exit(1);
+        }
+    }
+
+    /**
+     * @brief coping an image from one buffer to another.
+     * 
+     * @param index  the index of the image in the queue
+     * @param local_img pointer to the local image
+     * @param remote_img_addr pointer to the remote image
+     * @param cpy_cpu_to_gpu true for coping img_in to gpu, false for coping img_out to cpu.
+     */
     void copyImg(int index, uchar *local_img,uint64_t remote_img_addr,bool cpy_cpu_to_gpu)
     {
-        struct ibv_wc wc;
         if (cpy_cpu_to_gpu)
         {
             post_rdma_write(
-                remote_img_addr,                        // remote_dst
+                (uintptr_t)remote_img_addr,                        // remote_dst
                 IMG_SZ,                                 // len
                 remote_info->img_in_rkey,               // rkey
-                local_img,                              // local_src
+                (uintptr_t)local_img,                              // local_src
                 mr_images_in->lkey,                     // lkey
                 index,                                  // wr_id
                 nullptr); 
@@ -603,14 +651,15 @@ public:
         else
         {
             post_rdma_read(
-                local_img,              // local_dst
+                (uintptr_t)local_img,              // local_dst
                 IMG_SZ,                 // len
                 mr_images_out->lkey,    // lkey
-                remote_img_addr,        // remote_src
+                (uintptr_t)remote_img_addr,        // remote_src
                 remote_info->img_out_rkey,    // rkey
                 index);                 // wr_id
         }
-
+        struct ibv_wc wc;
+            
         do{
             int ncqes = ibv_poll_cq(cq, 1, &wc);
         }while(ncqes == 0);
@@ -631,6 +680,45 @@ public:
             perror("read image failed");
             exit(1);
         }
+    }
+
+
+    void enqueueJob(int index, Job *job)
+    {
+        Job * remote_job = (Job *)remote_info->ctg_queue_addr;
+        uint64_t remote_job_addr = &remote_job[index];
+        post_rdma_write(
+            remote_job_addr,                                    // remote_dst
+            sizeof(Job),                            // len
+            remote_info->ctg_queue_rkey,            // rkey
+            (uintptr_t)job,                         // local_src
+            mr_sending_jobs->lkey,                     // lkey
+            index,                                  // wr_id
+            nullptr); 
+            
+        struct ibv_wc wc;
+        
+        do{
+            int ncqes = ibv_poll_cq(cq, 1, &wc);
+        }while(ncqes == 0);
+
+        if (ncqes < 0) 
+        {
+            perror("ibv_poll_cq() failed");
+            exit(1);
+        }
+        VERBS_WC_CHECK(wc);
+        if( wc.opcode != IBV_WC_RDMA_WRITE)
+        {
+            perror("enqueue job failed");
+            exit(1);
+        }
+
+    }
+
+    int dequeueJob()
+    {
+
     }
 
     virtual bool dequeue(int *img_id) override
