@@ -322,7 +322,7 @@ private:
    
 
 public:
-    explicit server_queues_context(uint16_t tcp_port) : rdma_server_context(tcp_port), server(create_queues_server(256))
+    explicit server_queues_context(uint16_t tcp_port) : rdma_server_context(tcp_port), server(create_queues_server(1024))
     {
         /* TODO Initialize additional server MRs as needed. */
         struct rdma_server_remote_access rdma_server_info;
@@ -546,15 +546,27 @@ public:
         if(indexes.ctg_tail - indexes.ctg_head == remote_info->number_of_slots)
             return false;
 
-                
-        Job enqueue_job = {img_id,img_in,img_out};
-        return false;
+        //copy img
+        uchar * remote_img_in = (uchar *)remote_info->img_in_addr;
+        uint64_t dst = &remote_img_in[index * IMG_SZ];
+        copyImg(indexes.ctg_head, img_in, dst, true);
+
+        //create a job
+        sending_jobs[indexes.ctg_head] = {img_id,img_in,img_out};
+
+        //insert job to queue
+
+
+        //increase _head index
+
+
+        return true;
     }
 
     void readIndex(void *local_dst, uint32_t len, 
         uint64_t remote_src, uint32_t rkey, uint64_t wr_id)
     {
-        post_rdma_read(local_dst, len, mr_indexes->lkey,remote_src,rkey,wr_id);          // wr_id
+        post_rdma_read(local_dst, len, mr_indexes->lkey,remote_src,rkey,wr_id); 
         //check for CQE
         struct ibv_wc wc;
         do{
@@ -572,8 +584,53 @@ public:
             perror("read index failed");
             exit(1);
         }
-        Job enqueue_job = {img_id,img_in,img_out};
-        return false;
+    }
+
+    void copyImg(int index, uchar *local_img,uint64_t remote_img_addr,bool cpy_cpu_to_gpu)
+    {
+        struct ibv_wc wc;
+        if (cpy_cpu_to_gpu)
+        {
+            post_rdma_write(
+                remote_img_addr,                        // remote_dst
+                IMG_SZ,                                 // len
+                remote_info->img_in_rkey,               // rkey
+                local_img,                              // local_src
+                mr_images_in->lkey,                     // lkey
+                index,                                  // wr_id
+                nullptr); 
+        }
+        else
+        {
+            post_rdma_read(
+                local_img,              // local_dst
+                IMG_SZ,                 // len
+                mr_images_out->lkey,    // lkey
+                remote_img_addr,        // remote_src
+                remote_info->img_out_rkey,    // rkey
+                index);                 // wr_id
+        }
+
+        do{
+            int ncqes = ibv_poll_cq(cq, 1, &wc);
+        }while(ncqes == 0);
+
+        if (ncqes < 0) 
+        {
+            perror("ibv_poll_cq() failed");
+            exit(1);
+        }
+        VERBS_WC_CHECK(wc);
+        if(cpy_cpu_to_gpu && wc.opcode != IBV_WC_RDMA_WRITE)
+        {
+            perror("write image failed");
+            exit(1);
+        }
+        if(!cpy_cpu_to_gpu && wc.opcode != IBV_WC_RDMA_READ)
+        {
+            perror("read image failed");
+            exit(1);
+        }
     }
 
     virtual bool dequeue(int *img_id) override
