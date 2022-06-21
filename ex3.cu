@@ -356,8 +356,8 @@ public:
 
         rdma_server_info.gtc_queue_rkey = mr_gpu_to_cpu_q->rkey;
         rdma_server_info.gtc_queue_addr = (uintptr_t)gpu_to_cpu_q->jobs;
-        rdma_server_info.gtg_head_addr = (uint64_t)gpu_to_cpu_q->_head;
-        rdma_server_info.gtg_tail_addr = (uint64_t)gpu_to_cpu_q->_tail;
+        rdma_server_info.gtc_head_addr = (uint64_t)gpu_to_cpu_q->_head;
+        rdma_server_info.gtc_tail_addr = (uint64_t)gpu_to_cpu_q->_tail;
 
         rdma_server_info.number_of_slots = server->num_of_slots;
 
@@ -440,9 +440,10 @@ private:
     uint32_t send_cqes_received = 0;
     
     //Job array for sending requests to the server + Job
-    std::vector<Job> sending_jobs;
     Job recieved_job = {0,0,0};
-    struct ibv_mr *mr_sending_jobs = nullptr;
+    Job sending_job = {0,0,0};
+
+    struct ibv_mr *mr_sending_job = nullptr;
     struct ibv_mr *mr_recieved_job = nullptr;
 
 
@@ -474,7 +475,7 @@ public:
         kill();
         //need to release memory regions and other resources here    
         ibv_dereg_mr(mr_indexes);
-        ibv_dereg_mr(mr_sending_jobs);
+        ibv_dereg_mr(mr_sending_job);
         ibv_dereg_mr(mr_recieved_job);
         ibv_dereg_mr(mr_images_out);
         ibv_dereg_mr(mr_images_in);
@@ -483,11 +484,11 @@ public:
     void initialize_job_pointers()
     {
         //initialize the vector of jobs with the size of the queue.
-        sending_jobs = std::vector<Job>(remote_info.number_of_slots,{0,0,0});
+        //sending_jobs = std::vector<Job>(remote_info.number_of_slots,{0,0,0});
 
         //Adding memory regions
-        mr_sending_jobs = ibv_reg_mr(pd, sending_jobs.begin(), sizeof(Job) * remote_info.number_of_slots ,IBV_ACCESS_LOCAL_WRITE);
-        if (!mr_sending_jobs) {
+        mr_sending_job = ibv_reg_mr(pd, &sending_job, sizeof(Job),IBV_ACCESS_LOCAL_WRITE);
+        if (!mr_sending_job) {
             perror("ibv_reg_mr() failed for job queue");
             exit(1);
         }
@@ -541,14 +542,14 @@ public:
 
         //copy img
         uchar * remote_img_in = (uchar *)remote_info.img_in_addr;
-        uint64_t dst = &remote_img_in[img_id * IMG_SZ];
+        uchar * dst = &remote_img_in[img_id * IMG_SZ];
         copyImg(indexes.ctg_tail, img_in, dst, true);
 
         //create a job
-        sending_jobs[indexes.ctg_tail] = {img_id, img_in, img_out};
+        sending_job = {img_id, img_in, img_out};
 
         //insert job to queue
-        enqueueJob(indexes.ctg_tail, &sending_jobs[indexes.ctg_tail]);
+        enqueueJob(indexes.ctg_tail, &sending_job);
 
         //increase _tail index
         updateIndex(true);
@@ -570,10 +571,9 @@ public:
 
         //dequeue a job and save it in recieved_job
         dequeueJob(indexes.gtc_head, &recieved_job);
-        *img_out = recieved_job.img_out;
         //copy img
         uchar * remote_img_out = (uchar *)remote_info.img_out_addr;
-        uint64_t src = &remote_img_out[recieved_job.img_id * IMG_SZ];
+        uchar * src = &remote_img_out[recieved_job.img_id * IMG_SZ];
         copyImg(indexes.gtc_head, recieved_job.img_out, src, false);
         
         //increase _head index
@@ -591,26 +591,32 @@ public:
      */
     void readIndex(bool tail)
     {
+        void *local_dst = NULL;
+        uint64_t remote_src = 0;    
+        uint32_t rkey = 0;    
+        uint64_t wr_id = 0;
+        int ncqes = 0;
+
         if(tail)
         {
-            void *local_dst = &indexes.ctg_tail;
-            uint64_t remote_src = remote_info.ctg_tail_addr;    // remote_src
-            uint32_t rkey = remote_info.ctg_queue_rkey;    // rkey
-            uint64_t wr_id = indexes.ctg_tail;
+            local_dst = &indexes.ctg_tail;
+            remote_src = remote_info.ctg_tail_addr;    // remote_src
+            rkey = remote_info.ctg_queue_rkey;    // rkey
+            wr_id = indexes.ctg_tail;
         }
         else
         {
-            void *local_dst = &indexes.gtc_head;
-            uint64_t remote_src = remote_info.gtc_head_addr;    // remote_src
-            uint32_t rkey = remote_info.gtc_queue_rkey;    // rkey
-            uint64_t wr_id = indexes.gtc_head;
+            local_dst = &indexes.gtc_head;
+            remote_src = remote_info.gtc_head_addr;    // remote_src
+            rkey = remote_info.gtc_queue_rkey;    // rkey
+            wr_id = indexes.gtc_head;
         }
 
-        post_rdma_read(local_dst, atomic_int_size, mr_indexes->lkey,remote_src,rkey,wr_id); 
+        post_rdma_read(local_dst, atomic_int_size, mr_indexes->lkey, remote_src, rkey,wr_id); 
         //check for CQE
         struct ibv_wc wc;
         do{
-            int ncqes = ibv_poll_cq(cq, 1, &wc);
+            ncqes = ibv_poll_cq(cq, 1, &wc);
         }while(ncqes == 0);
 
         if (ncqes < 0) 
@@ -633,21 +639,26 @@ public:
      */
     void updateIndex(bool tail) // need to implement
     {
+        void *local_src = NULL;
+        uint64_t remote_dst = 0;  
+        uint32_t rkey = 0;    
+        uint64_t wr_id = 0;
+        int ncqes = 0;
         if(tail)
         {
             indexes.ctg_tail++;
-            void * local_src = &indexes.ctg_tail;
-            uint64_t remote_dst = remote_info.ctg_tail_addr;    // remote_src
-            uint32_t rkey = remote_info.ctg_queue_rkey;    // rkey
-            uint64_t wr_id = indexes.ctg_tail;
+            local_src = &indexes.ctg_tail;
+            remote_dst = remote_info.ctg_tail_addr;    // remote_src
+            rkey = remote_info.ctg_queue_rkey;    // rkey
+            wr_id = indexes.ctg_tail;
         }
         else
         {
             indexes.gtc_head++;
-            void * local_src = &indexes.gtc_head;
-            uint64_t remote_dst = remote_info.gtc_head_addr;    // remote_src
-            uint32_t rkey = remote_info.gtc_queue_rkey;    // rkey
-            uint64_t wr_id = indexes.gtc_head; 
+            local_src = &indexes.gtc_head;
+            remote_dst = remote_info.gtc_head_addr;    // remote_src
+            rkey = remote_info.gtc_queue_rkey;    // rkey
+            wr_id = indexes.gtc_head; 
         }
 
        
@@ -663,7 +674,7 @@ public:
         //check for CQE
         struct ibv_wc wc;
         do{
-            int ncqes = ibv_poll_cq(cq, 1, &wc);
+            ncqes = ibv_poll_cq(cq, 1, &wc);
         }while(ncqes == 0);
 
         if (ncqes < 0) 
@@ -683,19 +694,20 @@ public:
      * @brief coping an image from one buffer to another.
      * 
      * @param index  the index of the image in the queue
-     * @param local_img pointer to the local image
-     * @param remote_img_addr pointer to the remote image
+     * @param src_ptr pointer to the source image
+     * @param dst_ptr pointer to the dest image
      * @param cpy_cpu_to_gpu true for coping img_in to gpu, false for coping img_out to cpu.
      */
-    void copyImg(int index, uchar *local_img,uint64_t remote_img_addr,bool cpy_cpu_to_gpu)
+    void copyImg(int index, uchar * src_ptr, uchar * dst_ptr,bool cpy_cpu_to_gpu)
     {
+        int ncqes = 0;
         if (cpy_cpu_to_gpu)
         {
             post_rdma_write(
-                (uintptr_t)remote_img_addr,                        // remote_dst
+                (uint64_t)dst_ptr,                        // remote_dst
                 IMG_SZ,                                 // len
                 remote_info.img_in_rkey,               // rkey
-                (uintptr_t)local_img,                              // local_src
+                src_ptr,                              // local_src
                 mr_images_in->lkey,                     // lkey
                 index,                                  // wr_id
                 nullptr); 
@@ -703,17 +715,17 @@ public:
         else
         {
             post_rdma_read(
-                (uintptr_t)local_img,              // local_dst
+                (void *)src_ptr,              // local_dst
                 IMG_SZ,                 // len
                 mr_images_out->lkey,    // lkey
-                (uintptr_t)remote_img_addr,        // remote_src
+                (uintptr_t)dst_ptr,        // remote_src
                 remote_info.img_out_rkey,    // rkey
                 index);                 // wr_id
         }
         struct ibv_wc wc;
             
         do{
-            int ncqes = ibv_poll_cq(cq, 1, &wc);
+            ncqes = ibv_poll_cq(cq, 1, &wc);
         }while(ncqes == 0);
 
         if (ncqes < 0) 
@@ -738,20 +750,21 @@ public:
     void enqueueJob(int index, Job *job)
     {
         Job * remote_job = (Job *)remote_info.ctg_queue_addr;
-        uint64_t remote_job_addr = &remote_job[index];
+        Job * remote_job_addr = &remote_job[index];
+        int ncqes = 0;
         post_rdma_write(
-            remote_job_addr,                        // remote_dst
+            (uint64_t)remote_job_addr,                        // remote_dst
             job_size,                               // len
             remote_info.ctg_queue_rkey,            // rkey
-            (uintptr_t)job,                         // local_src
-            mr_sending_jobs->lkey,                  // lkey
+            job,                         // local_src
+            mr_sending_job->lkey,                  // lkey
             index,                                  // wr_id
             nullptr); 
 
         struct ibv_wc wc;
         
         do{
-            int ncqes = ibv_poll_cq(cq, 1, &wc);
+            ncqes = ibv_poll_cq(cq, 1, &wc);
         }while(ncqes == 0);
 
         if (ncqes < 0) 
@@ -768,18 +781,18 @@ public:
 
     }
 
-    int dequeueJob(int index, Job *job)
+    void dequeueJob(int index, Job *job)
     {
         Job * remote_job = (Job *)remote_info.gtc_queue_addr;
-        uint64_t remote_job_addr = &remote_job[index];
+        Job * remote_job_addr = (Job *)&remote_job[index];
+
         post_rdma_read(
-            remote_job_addr,                        // remote_dst
+            (void * )job,                           // local_dst
             job_size,                               // len
-            remote_info.gtc_queue_rkey,            // rkey
-            (uintptr_t)job,                         // local_src
             mr_recieved_job->lkey,                  // lkey
-            index,                                  // wr_id
-            nullptr); 
+            (uint64_t)remote_job_addr,              // remote_src
+            remote_info.gtc_queue_rkey,            // rkey
+            index);                                   // wr_id
     }
 
 

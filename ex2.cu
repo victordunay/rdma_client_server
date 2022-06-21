@@ -415,6 +415,6 @@ public:
     }
 };
 
-std::unique_ptr<image_processing_server> create_queues_server(int threads)
+std::unique_ptr<queue_server> create_queues_server(int threads)
 {
     return std::make_unique<queue_server>(threads);
