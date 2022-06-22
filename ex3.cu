@@ -422,7 +422,7 @@ public:
                 }
             }
         }
-    };
+    }
 };
 
 
@@ -470,7 +470,7 @@ public:
     ~client_queues_context()
     {
 	/* TODO terminate the server and release memory regions and other resources */
-        //kill();
+        kill();
         //need to release memory regions and other resources here    
         ibv_dereg_mr(mr_indexes);
         ibv_dereg_mr(mr_sending_job);
@@ -485,12 +485,12 @@ public:
         //sending_jobs = std::vector<Job>(remote_info.number_of_slots,{0,0,0});
 
         //Adding memory regions
-        mr_sending_job = ibv_reg_mr(pd, &sending_job, sizeof(Job),IBV_ACCESS_LOCAL_WRITE);
+        mr_sending_job = ibv_reg_mr(pd, &sending_job, job_size,IBV_ACCESS_LOCAL_WRITE);
         if (!mr_sending_job) {
             perror("ibv_reg_mr() failed for job queue");
             exit(1);
         }
-        mr_recieved_job = ibv_reg_mr(pd, &recieved_job, sizeof(Job), IBV_ACCESS_LOCAL_WRITE);
+        mr_recieved_job = ibv_reg_mr(pd, &recieved_job, job_size, IBV_ACCESS_LOCAL_WRITE);
         if (!mr_recieved_job) {
             perror("ibv_reg_mr() failed for recieved_job");
             exit(1);
