@@ -1,17 +1,15 @@
 /* CUDA 10.2 has a bug that prevents including <cuda/atomic> from two separate
  * object files. As a workaround, we include ex2.cu directly here. */
-#include "ex2.cu"
-#include "common.cu"
-#include <cassert>
+ #include "ex2.cu"
 
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-
-#include <infiniband/verbs.h>
-#include <string.h>
-#include <unistd.h>
+ #include <cassert>
+ 
+ #include <sys/types.h>
+ #include <sys/socket.h>
+ #include <netinet/in.h>
+ #include <arpa/inet.h>
+ 
+ #include <infiniband/verbs.h>
 
 
 class server_rpc_context : public rdma_server_context {
@@ -296,8 +294,8 @@ struct rdma_server_remote_index
     int gtc_tail;
 };
 
-int job_size = sizeof(Job);
-int atomic_int_size = sizeof(cuda::atomic<int>);
+int const job_size = sizeof(Job);
+int const atomic_int_size = sizeof(cuda::atomic<int>);
 
 /********************************************************************************/
 /*                                server side                         */
@@ -472,7 +470,7 @@ public:
     ~client_queues_context()
     {
 	/* TODO terminate the server and release memory regions and other resources */
-        kill();
+        //kill();
         //need to release memory regions and other resources here    
         ibv_dereg_mr(mr_indexes);
         ibv_dereg_mr(mr_sending_job);
@@ -578,7 +576,7 @@ public:
         
         //increase _head index
         updateIndex(false);
-
+        
         return true;
     }
 
@@ -796,8 +794,10 @@ public:
     }
 
 
+
     void kill()
     {
+
         while (!enqueue(-1, // Indicate termination
                        NULL, NULL)) ;
         int img_id = 0;
@@ -807,6 +807,7 @@ public:
         } while (!dequeued || img_id != -1);
     }
 };
+
 
 std::unique_ptr<rdma_server_context> create_server(mode_enum mode, uint16_t tcp_port)
 {
