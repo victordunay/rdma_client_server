@@ -361,16 +361,20 @@ public:
 
         /* TODO Exchange rkeys, addresses, and necessary information (e.g.
          * number of queues) with the client */
+        printf("sending server info...");
         send_over_socket(&rdma_server_info, sizeof(rdma_server_info));
-
+        printf("server info was sent successfully!");
+        
         struct rdma_server_remote_index queue_indexes;
 
         queue_indexes.ctg_head = cpu_to_gpu_q->_head;
         queue_indexes.ctg_tail = cpu_to_gpu_q->_tail;
         queue_indexes.gtc_head = gpu_to_cpu_q->_head;
         queue_indexes.gtc_tail = gpu_to_cpu_q->_tail;
+        printf("sending queue_indexes ...");
 
         send_over_socket(&queue_indexes, sizeof(queue_indexes));
+        printf("queue_indexes was sent successfully!");
 
     }
 
@@ -820,7 +824,7 @@ std::unique_ptr<rdma_server_context> create_server(mode_enum mode, uint16_t tcp_
         printf("Unknown mode.\n");
         exit(1);
     }
-}
+};
 
 std::unique_ptr<rdma_client_context> create_client(mode_enum mode, uint16_t tcp_port)
 {
@@ -833,4 +837,4 @@ std::unique_ptr<rdma_client_context> create_client(mode_enum mode, uint16_t tcp_
         printf("Unknown mode.\n");
         exit(1);
     }
-}
+};
