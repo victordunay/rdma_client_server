@@ -327,14 +327,14 @@ public:
 
 
 
-        mr_gpu_to_cpu_q = ibv_reg_mr(pd, gpu_to_cpu_q->jobs, sizeof(shared_queue), IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
+        mr_gpu_to_cpu_q = ibv_reg_mr(pd, gpu_to_cpu_q, sizeof(shared_queue), IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
         if (!mr_gpu_to_cpu_q) 
         {
             fprintf(stderr, "Error, ibv_reg_mr() failed\n");
             exit(1);
         }
 
-        mr_cpu_to_gpu_q = ibv_reg_mr(pd, cpu_to_gpu_q->jobs, sizeof(shared_queue), IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
+        mr_cpu_to_gpu_q = ibv_reg_mr(pd, cpu_to_gpu_q, sizeof(shared_queue), IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
         if (!mr_cpu_to_gpu_q) 
         {
             fprintf(stderr, "Error, ibv_reg_mr() failed\n");
@@ -361,20 +361,16 @@ public:
 
         /* TODO Exchange rkeys, addresses, and necessary information (e.g.
          * number of queues) with the client */
-        printf("sending server info...");
         send_over_socket(&rdma_server_info, sizeof(rdma_server_info));
-        printf("server info was sent successfully!");
-        
+
         struct rdma_server_remote_index queue_indexes;
 
         queue_indexes.ctg_head = cpu_to_gpu_q->_head;
         queue_indexes.ctg_tail = cpu_to_gpu_q->_tail;
         queue_indexes.gtc_head = gpu_to_cpu_q->_head;
         queue_indexes.gtc_tail = gpu_to_cpu_q->_tail;
-        printf("sending queue_indexes ...");
 
         send_over_socket(&queue_indexes, sizeof(queue_indexes));
-        printf("queue_indexes was sent successfully!");
 
     }
 
