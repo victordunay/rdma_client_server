@@ -334,14 +334,14 @@ public:
 
 
 
-        mr_gpu_to_cpu_q = ibv_reg_mr(pd, gpu_to_cpu_q->jobs, sizeof(server->num_of_slots*job_size), IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
+        mr_gpu_to_cpu_q = ibv_reg_mr(pd, gpu_to_cpu_q->jobs, sizeof(server->num_of_slots)*job_size, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
         if (!mr_gpu_to_cpu_q) 
         {
             fprintf(stderr, "Error, ibv_reg_mr() failed\n");
             exit(1);
         }
 
-        mr_cpu_to_gpu_q = ibv_reg_mr(pd, cpu_to_gpu_q->jobs, sizeof(server->num_of_slots*job_size), IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
+        mr_cpu_to_gpu_q = ibv_reg_mr(pd, cpu_to_gpu_q->jobs, sizeof(server->num_of_slots)*job_size, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
         if (!mr_cpu_to_gpu_q) 
         {
             fprintf(stderr, "Error, ibv_reg_mr() failed\n");
@@ -363,6 +363,7 @@ public:
         }
         //have to assign a memory region to the jobs.
 
+       // printf("2nd job %x", &cpu_to_gpu_q->jobs[1]);
         rdma_server_info.img_in_rkey = mr_images_in->rkey;
         rdma_server_info.img_in_addr = (uintptr_t)images_in;
         rdma_server_info.img_out_rkey = mr_images_out->rkey;
@@ -578,7 +579,7 @@ public:
          * a CPU-GPU producer consumer queue running on the server. */
         printf("entered enqueue\n");
         //reading _tail from remote
-        readIndex(true);          // wr_id
+        readIndex(false);          // wr_id
         printf("readIndex didnt failed\n");
         //checks if queue is full
         if(indexes.ctg_tail - indexes.ctg_head == remote_info.number_of_slots)
@@ -731,7 +732,7 @@ public:
             exit(1);
         }
         VERBS_WC_CHECK(wc);
-        if(wc.opcode != IBV_WC_RDMA_READ)
+        if(wc.opcode != IBV_WC_RDMA_WRITE)
         {
             perror("write index failed");
             exit(1);
@@ -798,10 +799,10 @@ public:
     void enqueueJob(int index, Job *job)
     {
         Job * remote_jobs_queue = (Job *)remote_info.ctg_queue_addr;
-        Job * remote_job_addr = &remote_jobs_queue[index];
-        printf("first job adrress: %x, index is %d, the writen job address is %x\n",remote_jobs_queue,index, remote_job_addr);
+        uint64_t remote_job_addr = (uintptr_t)&remote_jobs_queue[index%remote_info.number_of_slots];
+        printf("index : %d\n", index);
         post_rdma_write(
-            (uint64_t)remote_job_addr,             // remote_dst
+            remote_job_addr,                       // remote_dst
             job_size,                              // len
             remote_info.ctg_queue_rkey,            // rkey
             job,                                   // local_src
@@ -832,13 +833,13 @@ public:
     void dequeueJob(int index, Job *job)
     {
         Job * remote_job = (Job *)remote_info.gtc_queue_addr;
-        Job * remote_job_addr = (Job *)&remote_job[index];
+        uint64_t remote_job_addr = (uintptr_t)&remote_job[index%remote_info.number_of_slots];
 
         post_rdma_read(
-            (void * )job,                           // local_dst
+            job,                           // local_dst
             job_size,                               // len
             mr_recieved_job->lkey,                  // lkey
-            (uint64_t)remote_job_addr,              // remote_src
+            remote_job_addr,              // remote_src
             remote_info.gtc_queue_rkey,            // rkey
             index);                                   // wr_id
     }
