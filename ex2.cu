@@ -30,30 +30,30 @@ typedef cuda::atomic<int,cuda::thread_scope_device> atomic_lock_t;
   * @param histogram - the histogram of the tile
   * @param image - The images array to process.
   */
- __device__ void create_histogram(int image_start, int t_row, int t_col ,int *histogram, uchar *image)
- {
-    
-    int tid = threadIdx.y * blockDim.x + threadIdx.x;
-    // initialize histogram
-    if(tid < N_BINS)
-    {
-        histogram[tid] = 0;
-    }
-    __syncthreads();
-    //calculates the pixel index that assigned to the thread 
-    int row_base_offset = (t_row * TILE_WIDTH + threadIdx.y) * IMG_WIDTH ;
-    int row_interval = blockDim.y * IMG_WIDTH;
-    int col_offset = t_col * TILE_WIDTH + threadIdx.x; 
-
-    uchar pixel_value = 0;
-
-    //The block has 16 rows, Therefore, it runs 4 times so every warp run on 4 different rows
-    for(int i = 0; i < TILE_WIDTH/blockDim.y; i++ ) 
-    {
-        pixel_value = image[image_start + row_base_offset + (i * row_interval) + col_offset];
-        atomicAdd(&(histogram[pixel_value]), 1);
-    } 
- }
+  __device__ void create_histogram(int image_start, int t_row, int t_col ,int *histogram, uchar *image)
+  {
+     
+     int tid = threadIdx.y * blockDim.x + threadIdx.x;
+     // initialize histogram
+     if(tid < N_BINS)
+     {
+         histogram[tid] = 0;
+     }
+     __syncthreads();
+     //calculates the pixel index that assigned to the thread 
+     int row_base_offset = (t_row * TILE_WIDTH + threadIdx.y) * IMG_WIDTH ;
+     int row_interval = blockDim.y * IMG_WIDTH;
+     int col_offset = t_col * TILE_WIDTH + threadIdx.x; 
+ 
+     uchar pixel_value = 0;
+ 
+     //The block has 16 rows, Therefore, it runs 4 times so every warp run on 4 different rows
+     for(int i = 0; i < TILE_WIDTH/blockDim.y; i++ ) 
+     {
+         pixel_value = image[image_start + row_base_offset + (i * row_interval) + col_offset];
+         atomicAdd(&(histogram[pixel_value]), 1);
+     } 
+  }
 
 
  /**
@@ -78,7 +78,6 @@ __device__ void prefix_sum(int arr[], int arr_size)
     }
     return;
 }
-
 
 /**
  * @brief Calculates a map from the cdf and saves it in the given index in the 'maps' array.
@@ -112,12 +111,11 @@ __device__ void calculate_maps(int map_start, int t_row, int t_col, int *cdf, uc
 __device__
  void interpolate_device(uchar* maps ,uchar *in_img, uchar* out_img);
 
-
-/**
+ /**
  * @brief process an image which assigned to the block index. It takes an image given in all_in, and return the processed image in all_out respectively.
  * 
  * @param in Array of input images, in global memory ([N_IMAGES][IMG_HEIGHT][IMG_WIDTH])
- * @param all_out Array of output images, in global memory ([N_IMAGES][IMG_HEIGHT][IMG_WIDTH])
+ * @param out Array of output images, in global memory ([N_IMAGES][IMG_HEIGHT][IMG_WIDTH])
  * @param maps 4D array ([N_IMAGES][TILES_COUNT][TILES_COUNT][256]) of    
  *             the tiles’ maps, in global memory.
  * @return __global__ 
@@ -125,23 +123,25 @@ __device__
 __device__ void process_image(uchar *in, uchar *out, uchar* maps) 
 {
    __shared__ int cdf[N_BINS];
-    int image_start = IMG_WIDTH * IMG_HEIGHT * blockIdx.x;
+    //printf("1");
+    //int image_start = IMG_WIDTH * IMG_HEIGHT * blockIdx.x;
     int map_start = TILE_COUNT * TILE_COUNT * N_BINS * blockIdx.x;
     for(int t_row = 0; t_row< TILE_COUNT; ++t_row)
     {
         for(int t_col = 0; t_col< TILE_COUNT; ++t_col)
         {
-            create_histogram(image_start,t_row, t_col, cdf, in);
+            create_histogram(0,t_row, t_col, cdf, in);
             __syncthreads();
             prefix_sum(cdf, N_BINS);
             calculate_maps(map_start, t_row, t_col,cdf, maps); 
             __syncthreads();
         }
     }
-    interpolate_device(&maps[map_start],&in[image_start], &out[image_start]);
+    interpolate_device(maps+map_start,in, out);
     return; 
-
 }
+
+
 // TODO complete according to HW2:
 //          implement a lock,
 //          implement a MPMC queue,
@@ -199,11 +199,11 @@ class shared_queue
 {
 private:
 
-    //queue data
-    size_t queue_size;
     
     
 public:
+    //queue data
+    size_t queue_size;
     //queue sync variables
     cuda::atomic<int> _head;
     cuda::atomic<int> _tail;
