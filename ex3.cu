@@ -334,14 +334,14 @@ public:
 
 
 
-        mr_gpu_to_cpu_q = ibv_reg_mr(pd, gpu_to_cpu_q->jobs, sizeof(server->num_of_slots)*job_size, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
+        mr_gpu_to_cpu_q = ibv_reg_mr(pd, gpu_to_cpu_q->jobs, server->num_of_slots*job_size, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
         if (!mr_gpu_to_cpu_q) 
         {
             fprintf(stderr, "Error, ibv_reg_mr() failed\n");
             exit(1);
         }
 
-        mr_cpu_to_gpu_q = ibv_reg_mr(pd, cpu_to_gpu_q->jobs, sizeof(server->num_of_slots)*job_size, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
+        mr_cpu_to_gpu_q = ibv_reg_mr(pd, cpu_to_gpu_q->jobs, server->num_of_slots*job_size, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
         if (!mr_cpu_to_gpu_q) 
         {
             fprintf(stderr, "Error, ibv_reg_mr() failed\n");
@@ -577,10 +577,12 @@ public:
     {
         /* TODO use RDMA Write and RDMA Read operations to enqueue the task on
          * a CPU-GPU producer consumer queue running on the server. */
-        printf("entered enqueue\n");
+        
+        // printf("entered enqueue\n");
         //reading _tail from remote
         readIndex(false);          // wr_id
-        printf("readIndex didnt failed\n");
+       // printf("readIndex didnt failed\n");
+
         //checks if queue is full
         if(indexes.ctg_tail - indexes.ctg_head == remote_info.number_of_slots)
             return false;
@@ -589,16 +591,19 @@ public:
         uchar * remote_img_in = (uchar *)remote_info.img_in_addr;
         uchar * dst = &remote_img_in[img_id * IMG_SZ];
         copyImg(indexes.ctg_tail, img_in, dst, true);
-        printf("copyImg didnt failed\n");
+        //printf("copyImg didnt failed\n");
+
         //create a job
         sending_job = {img_id, img_in, img_out};
 
         //insert job to queue
         enqueueJob(indexes.ctg_tail, &sending_job);
-        printf("enqueueJob didnt failed\n");
+        //printf("enqueueJob didnt failed\n");
+
         //increase _tail index
         updateIndex(true);
-        printf("enqueue works\n");
+
+        //printf("enqueue works\n");
         return true;
     }
 
@@ -607,24 +612,28 @@ public:
         /* TODO use RDMA Write and RDMA Read operations to detect the completion and dequeue a processed image
          * through a CPU-GPU producer consumer queue running on the server. */
         //reading head from remote
-        printf("entered dequeue\n");
+
+        //printf("entered dequeue\n");
         readIndex(false);          // wr_id
-        printf("readIndex didnt failed\n");
+        //printf("readIndex didnt failed\n");
+
         //checks if queue is empty
         if(indexes.gtc_tail == indexes.gtc_head)
             return false;
 
         //dequeue a job and save it in recieved_job
         dequeueJob(indexes.gtc_head, &recieved_job);
-        printf("dequeueJob didnt failed\n");
+        //printf("dequeueJob didnt failed\n");
         //copy img
+
         uchar * remote_img_out = (uchar *)remote_info.img_out_addr;
         uchar * src = &remote_img_out[recieved_job.img_id * IMG_SZ];
         copyImg(indexes.gtc_head, recieved_job.img_out, src, false);
-        printf("copyIMG didnt failed\n");
+        //printf("copyIMG didnt failed\n");
+
         //increase _head index
         updateIndex(false);
-        printf("dequeue works\n");
+        //printf("dequeue works\n");
         return true;
     }
 
@@ -800,7 +809,7 @@ public:
     {
         Job * remote_jobs_queue = (Job *)remote_info.ctg_queue_addr;
         uint64_t remote_job_addr = (uintptr_t)&remote_jobs_queue[index%remote_info.number_of_slots];
-        printf("index : %d\n", index);
+        //printf("index : %d\n", index);
         post_rdma_write(
             remote_job_addr,                       // remote_dst
             job_size,                              // len
