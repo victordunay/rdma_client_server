@@ -579,7 +579,7 @@ public:
         printf("entered enqueue\n");
         //reading _tail from remote
         readIndex(true);          // wr_id
-        
+        printf("readIndex didnt failed\n");
         //checks if queue is full
         if(indexes.ctg_tail - indexes.ctg_head == remote_info.number_of_slots)
             return false;
@@ -588,13 +588,13 @@ public:
         uchar * remote_img_in = (uchar *)remote_info.img_in_addr;
         uchar * dst = &remote_img_in[img_id * IMG_SZ];
         copyImg(indexes.ctg_tail, img_in, dst, true);
-
+        printf("copyImg didnt failed\n");
         //create a job
         sending_job = {img_id, img_in, img_out};
 
         //insert job to queue
         enqueueJob(indexes.ctg_tail, &sending_job);
-
+        printf("enqueueJob didnt failed\n");
         //increase _tail index
         updateIndex(true);
         printf("enqueue works\n");
@@ -626,7 +626,6 @@ public:
         printf("dequeue works\n");
         return true;
     }
-
 
 
     /**
@@ -679,7 +678,6 @@ public:
         VERBS_WC_CHECK(wc);
         if(wc.opcode != IBV_WC_RDMA_READ)
         {
-            perror("read index failed");
             exit(1);
         }
     }
@@ -799,20 +797,20 @@ public:
 
     void enqueueJob(int index, Job *job)
     {
-        Job * remote_job = (Job *)remote_info.ctg_queue_addr;
-        Job * remote_job_addr = &remote_job[index];
-        int ncqes = 0;
+        Job * remote_jobs_queue = (Job *)remote_info.ctg_queue_addr;
+        Job * remote_job_addr = &remote_jobs_queue[index];
+        printf("first job adrress: %x, index is %d, the writen job address is %x\n",remote_jobs_queue,index, remote_job_addr);
         post_rdma_write(
-            (uint64_t)remote_job_addr,                        // remote_dst
-            job_size,                               // len
+            (uint64_t)remote_job_addr,             // remote_dst
+            job_size,                              // len
             remote_info.ctg_queue_rkey,            // rkey
-            job,                         // local_src
+            job,                                   // local_src
             mr_sending_job->lkey,                  // lkey
-            index,                                  // wr_id
+            index,                                 // wr_id
             nullptr); 
-
-        struct ibv_wc wc;
-        
+            
+        struct ibv_wc wc; 
+        int ncqes = 0;
         do{
             ncqes = ibv_poll_cq(cq, 1, &wc);
         }while(ncqes == 0);
