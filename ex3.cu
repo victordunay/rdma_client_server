@@ -271,14 +271,18 @@ struct rdma_server_remote_access
 
     uint32_t ctg_queue_rkey;
     uint64_t ctg_queue_addr;    
-    uint64_t ctg_head_addr;    
-    uint64_t ctg_tail_addr;    
+   
 
     uint32_t gtc_queue_rkey;
     uint64_t gtc_queue_addr;
+    
+    uint32_t ctg_indexes_rkey;
+    uint64_t ctg_head_addr;    
+    uint64_t ctg_tail_addr; 
+
+    uint32_t gtc_indexes_rkey;
     uint64_t gtc_head_addr;
     uint64_t gtc_tail_addr;
-
     //uint32_t producer_index_rkey; //ctg_head
     //uint32_t producer_index_addr; //ctg_head
 
@@ -290,6 +294,7 @@ struct rdma_server_remote_index
 {
     int ctg_head;
     int ctg_tail;
+    
     int gtc_head;
     int gtc_tail;
 };
@@ -310,6 +315,8 @@ private:
 
     struct ibv_mr *mr_gpu_to_cpu_q;
     struct ibv_mr *mr_cpu_to_gpu_q;
+    struct ibv_mr *mr_gtc_indexes;
+    struct ibv_mr *mr_ctg_indexes;
 
 
    
@@ -327,14 +334,28 @@ public:
 
 
 
-        mr_gpu_to_cpu_q = ibv_reg_mr(pd, gpu_to_cpu_q, sizeof(shared_queue), IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
+        mr_gpu_to_cpu_q = ibv_reg_mr(pd, gpu_to_cpu_q->jobs, sizeof(server->num_of_slots*job_size), IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
         if (!mr_gpu_to_cpu_q) 
         {
             fprintf(stderr, "Error, ibv_reg_mr() failed\n");
             exit(1);
         }
 
-        mr_cpu_to_gpu_q = ibv_reg_mr(pd, cpu_to_gpu_q, sizeof(shared_queue), IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
+        mr_cpu_to_gpu_q = ibv_reg_mr(pd, cpu_to_gpu_q->jobs, sizeof(server->num_of_slots*job_size), IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
+        if (!mr_cpu_to_gpu_q) 
+        {
+            fprintf(stderr, "Error, ibv_reg_mr() failed\n");
+            exit(1);
+        }
+
+        mr_gtc_indexes = ibv_reg_mr(pd, gpu_to_cpu_q, sizeof(shared_queue), IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
+        if (!mr_gpu_to_cpu_q) 
+        {
+            fprintf(stderr, "Error, ibv_reg_mr() failed\n");
+            exit(1);
+        }
+
+        mr_ctg_indexes = ibv_reg_mr(pd, cpu_to_gpu_q, sizeof(shared_queue), IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
         if (!mr_cpu_to_gpu_q) 
         {
             fprintf(stderr, "Error, ibv_reg_mr() failed\n");
@@ -349,14 +370,20 @@ public:
 
         rdma_server_info.ctg_queue_rkey = mr_cpu_to_gpu_q->rkey;
         rdma_server_info.ctg_queue_addr = (uintptr_t)cpu_to_gpu_q->jobs;
-        rdma_server_info.ctg_head_addr = (uint64_t)cpu_to_gpu_q->_head;
-        rdma_server_info.ctg_tail_addr =  (uint64_t)cpu_to_gpu_q->_tail;
-
-
+        
+        
         rdma_server_info.gtc_queue_rkey = mr_gpu_to_cpu_q->rkey;
         rdma_server_info.gtc_queue_addr = (uintptr_t)gpu_to_cpu_q->jobs;
-        rdma_server_info.gtc_head_addr = (uint64_t)gpu_to_cpu_q->_head;
-        rdma_server_info.gtc_tail_addr = (uint64_t)gpu_to_cpu_q->_tail;
+        
+        
+        rdma_server_info.ctg_indexes_rkey = mr_ctg_indexes->rkey;
+        rdma_server_info.ctg_head_addr = (uint64_t)&cpu_to_gpu_q->_head;
+        rdma_server_info.ctg_tail_addr =  (uint64_t)&cpu_to_gpu_q->_tail;
+
+        rdma_server_info.gtc_indexes_rkey = mr_gtc_indexes->rkey;
+        rdma_server_info.gtc_head_addr = (uint64_t)&gpu_to_cpu_q->_head;
+        rdma_server_info.gtc_tail_addr = (uint64_t)&gpu_to_cpu_q->_tail;
+
 
         rdma_server_info.number_of_slots = server->num_of_slots;
 
@@ -488,6 +515,7 @@ public:
     ~client_queues_context()
     {
 	/* TODO terminate the server and release memory regions and other resources */
+        printf("enter destructor\n");
         kill();
         //need to release memory regions and other resources here    
         ibv_dereg_mr(mr_indexes);
@@ -548,7 +576,7 @@ public:
     {
         /* TODO use RDMA Write and RDMA Read operations to enqueue the task on
          * a CPU-GPU producer consumer queue running on the server. */
-        
+        printf("entered enqueue\n");
         //reading _tail from remote
         readIndex(true);          // wr_id
         
@@ -578,20 +606,21 @@ public:
         /* TODO use RDMA Write and RDMA Read operations to detect the completion and dequeue a processed image
          * through a CPU-GPU producer consumer queue running on the server. */
         //reading head from remote
-
+        printf("entered dequeue\n");
         readIndex(false);          // wr_id
-        
+        printf("readIndex didnt failed\n");
         //checks if queue is empty
         if(indexes.gtc_tail == indexes.gtc_head)
             return false;
 
         //dequeue a job and save it in recieved_job
         dequeueJob(indexes.gtc_head, &recieved_job);
+        printf("dequeueJob didnt failed\n");
         //copy img
         uchar * remote_img_out = (uchar *)remote_info.img_out_addr;
         uchar * src = &remote_img_out[recieved_job.img_id * IMG_SZ];
         copyImg(indexes.gtc_head, recieved_job.img_out, src, false);
-        
+        printf("copyIMG didnt failed\n");
         //increase _head index
         updateIndex(false);
         printf("dequeue works\n");
@@ -617,18 +646,25 @@ public:
         {
             local_dst = &indexes.ctg_tail;
             remote_src = remote_info.ctg_tail_addr;    // remote_src
-            rkey = remote_info.ctg_queue_rkey;    // rkey
+            rkey = remote_info.ctg_indexes_rkey;    // rkey
             wr_id = indexes.ctg_tail;
         }
         else
         {
             local_dst = &indexes.gtc_head;
             remote_src = remote_info.gtc_head_addr;    // remote_src
-            rkey = remote_info.gtc_queue_rkey;    // rkey
+            rkey = remote_info.gtc_indexes_rkey;    // rkey
             wr_id = indexes.gtc_head;
         }
 
-        post_rdma_read(local_dst, atomic_int_size, mr_indexes->lkey, remote_src, rkey,wr_id); 
+
+        post_rdma_read(local_dst,           // local_dst
+                       atomic_int_size,     // len
+                       mr_indexes->lkey,    // lkey
+                       remote_src,          // remote_src
+                       rkey,                // rkey
+                       wr_id);              // wr_id
+
         //check for CQE
         struct ibv_wc wc;
         do{
@@ -665,7 +701,7 @@ public:
             indexes.ctg_tail++;
             local_src = &indexes.ctg_tail;
             remote_dst = remote_info.ctg_tail_addr;    // remote_src
-            rkey = remote_info.ctg_queue_rkey;    // rkey
+            rkey = remote_info.ctg_indexes_rkey;    // rkey
             wr_id = indexes.ctg_tail;
         }
         else
@@ -673,11 +709,9 @@ public:
             indexes.gtc_head++;
             local_src = &indexes.gtc_head;
             remote_dst = remote_info.gtc_head_addr;    // remote_src
-            rkey = remote_info.gtc_queue_rkey;    // rkey
+            rkey = remote_info.gtc_indexes_rkey;    // rkey
             wr_id = indexes.gtc_head; 
         }
-
-       
 
         post_rdma_write(
             remote_dst,                        // remote_dst
