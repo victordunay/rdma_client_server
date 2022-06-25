@@ -420,6 +420,9 @@ public:
                             terminate = true;
                         }
                     break;
+                    default:
+                        printf("Unexpected completion\n");
+                        assert(false);
                 }
             }
         }
