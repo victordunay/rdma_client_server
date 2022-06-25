@@ -327,14 +327,14 @@ public:
 
 
 
-        mr_gpu_to_cpu_q = ibv_reg_mr(pd, gpu_to_cpu_q->jobs, sizeof(shared_queue), IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
+        mr_gpu_to_cpu_q = ibv_reg_mr(pd, gpu_to_cpu_q, sizeof(shared_queue), IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
         if (!mr_gpu_to_cpu_q) 
         {
             fprintf(stderr, "Error, ibv_reg_mr() failed\n");
             exit(1);
         }
 
-        mr_cpu_to_gpu_q = ibv_reg_mr(pd, cpu_to_gpu_q->jobs, sizeof(shared_queue), IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
+        mr_cpu_to_gpu_q = ibv_reg_mr(pd, cpu_to_gpu_q, sizeof(shared_queue), IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
         if (!mr_cpu_to_gpu_q) 
         {
             fprintf(stderr, "Error, ibv_reg_mr() failed\n");
@@ -821,7 +821,7 @@ std::unique_ptr<rdma_server_context> create_server(mode_enum mode, uint16_t tcp_
         printf("Unknown mode.\n");
         exit(1);
     }
-}
+};
 
 std::unique_ptr<rdma_client_context> create_client(mode_enum mode, uint16_t tcp_port)
 {
@@ -834,4 +834,4 @@ std::unique_ptr<rdma_client_context> create_client(mode_enum mode, uint16_t tcp_
         printf("Unknown mode.\n");
         exit(1);
     }
-}
+};
