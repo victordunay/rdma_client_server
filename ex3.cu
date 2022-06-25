@@ -340,6 +340,7 @@ public:
             fprintf(stderr, "Error, ibv_reg_mr() failed\n");
             exit(1);
         }
+        //have to assign a memory region to the jobs.
 
         rdma_server_info.img_in_rkey = mr_images_in->rkey;
         rdma_server_info.img_in_addr = (uintptr_t)images_in;
