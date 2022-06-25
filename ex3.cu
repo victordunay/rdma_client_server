@@ -372,7 +372,7 @@ public:
         queue_indexes.gtc_tail = gpu_to_cpu_q->_tail;
 
         send_over_socket(&queue_indexes, sizeof(queue_indexes));
-
+        printf("establish complited\n");
     }
 
     ~server_queues_context()
@@ -418,6 +418,19 @@ public:
                         {
                             printf("Terminating...\n");
                             terminate = true;
+                            post_rdma_write(
+                                req->output_addr,                       // remote_dst
+                                0,     // len
+                                req->output_rkey,                       // rkey
+                                0,                // local_src
+                                mr_images_out->lkey,                    // lkey
+                                KILLING_JOB, // wr_id
+                                (uint32_t*)&req->request_id);           // immediate
+                        }
+                        else
+                        {
+                            printf("Unexpected error\n");
+                            assert(false);
                         }
                     break;
                     default:
@@ -469,6 +482,7 @@ public:
         initialize_job_pointers();
         recv_over_socket(&indexes, sizeof(indexes));
         initialize_index_pointers();
+        printf("constructor works\n");
     }
 
     ~client_queues_context()
@@ -555,7 +569,7 @@ public:
 
         //increase _tail index
         updateIndex(true);
-
+        printf("enqueue works\n");
         return true;
     }
 
@@ -580,7 +594,7 @@ public:
         
         //increase _head index
         updateIndex(false);
-        
+        printf("dequeue works\n");
         return true;
     }
 
@@ -797,17 +811,82 @@ public:
             index);                                   // wr_id
     }
 
+    void sendTermination()
+    {
+        struct ibv_sge sg; /* scatter/gather element */
+        struct ibv_send_wr wr; /* WQE */
+        struct ibv_send_wr *bad_wr; /* ibv_post_send() reports bad WQEs here */
 
+        /* step 1: send killing request to server using Send operation */
+        
+        struct rpc_request *req = &requests[requests_sent % OUTSTANDING_REQUESTS];
+        req->request_id = KILLING_JOB;
+        req->input_rkey = 0;
+        req->input_addr = (uintptr_t)nullptr;
+        req->input_length = IMG_SZ;
+        req->output_rkey = 0;
+        req->output_addr = (uintptr_t)nullptr;
+        req->output_length = IMG_SZ;
+
+        /* RDMA send needs a gather element (local buffer)*/
+        memset(&sg, 0, sizeof(struct ibv_sge));
+        sg.addr = (uintptr_t)req;
+        sg.length = sizeof(*req);
+        sg.lkey = mr_requests->lkey;
+
+        /* WQE */
+        memset(&wr, 0, sizeof(struct ibv_send_wr));
+        wr.wr_id = KILLING_JOB; /* helps identify the WQE */
+        wr.sg_list = &sg;
+        wr.num_sge = 1;
+        wr.opcode = IBV_WR_SEND;
+        wr.send_flags = IBV_SEND_SIGNALED; /* always set this in this excersize. generates CQE */
+
+        /* post the WQE to the HCA to execute it */
+        if (ibv_post_send(qp, &wr, &bad_wr)) {
+            perror("ibv_post_send() failed");
+            exit(1);
+        }
+    }
+
+    bool getTermination(int *img_id)
+    {
+        struct ibv_wc wc; /* CQE */
+        int ncqes = ibv_poll_cq(cq, 1, &wc);
+        if (ncqes < 0) {
+            perror("ibv_poll_cq() failed");
+            exit(1);
+        }
+        if (ncqes == 0)
+            return false;
+
+	    VERBS_WC_CHECK(wc);
+
+        switch (wc.opcode) {
+        case IBV_WC_SEND:
+            printf("Termination send\n");
+            return false;
+        case IBV_WC_RECV_RDMA_WITH_IMM:
+            *img_id = wc.imm_data;
+            break;
+        default:
+            printf("Unexpected completion type\n");
+            assert(0);
+        }
+        if(*img_id !=KILLING_JOB)
+            printf("Unexpected request\n");
+        return true;
+    }
 
     void kill()
     {
+        sendTermination();
 
-        while (!enqueue(-1, // Indicate termination
-                       NULL, NULL)) ;
+        
         int img_id = 0;
         bool dequeued;
         do {
-            dequeued = dequeue(&img_id);
+            dequeued = getTermination(&img_id);
         } while (!dequeued || img_id != -1);
     }
 };
