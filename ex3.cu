@@ -614,7 +614,7 @@ public:
         //reading head from remote
 
         //printf("entered dequeue\n");
-        readIndex(false);          // wr_id
+        readIndex(true);          // wr_id
         //printf("readIndex didnt failed\n");
 
         //checks if queue is empty
