@@ -349,14 +349,14 @@ public:
         }
 
         mr_gtc_indexes = ibv_reg_mr(pd, gpu_to_cpu_q, sizeof(shared_queue), IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
-        if (!mr_gpu_to_cpu_q) 
+        if (!mr_gtc_indexes) 
         {
             fprintf(stderr, "Error, ibv_reg_mr() failed\n");
             exit(1);
         }
 
         mr_ctg_indexes = ibv_reg_mr(pd, cpu_to_gpu_q, sizeof(shared_queue), IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
-        if (!mr_cpu_to_gpu_q) 
+        if (!mr_ctg_indexes) 
         {
             fprintf(stderr, "Error, ibv_reg_mr() failed\n");
             exit(1);
@@ -379,7 +379,7 @@ public:
         
         rdma_server_info.ctg_indexes_rkey = mr_ctg_indexes->rkey;
         rdma_server_info.ctg_head_addr = (uint64_t)&cpu_to_gpu_q->_head;
-        rdma_server_info.ctg_tail_addr =  (uint64_t)&cpu_to_gpu_q->_tail;
+        rdma_server_info.ctg_tail_addr = (uint64_t)&cpu_to_gpu_q->_tail;
 
         rdma_server_info.gtc_indexes_rkey = mr_gtc_indexes->rkey;
         rdma_server_info.gtc_head_addr = (uint64_t)&gpu_to_cpu_q->_head;
@@ -486,6 +486,8 @@ private:
     Job recieved_job = {0,0,0};
     Job sending_job = {0,0,0};
 
+    uchar *images_out_addr;
+
     struct ibv_mr *mr_sending_job = nullptr;
     struct ibv_mr *mr_recieved_job = nullptr;
 
@@ -510,13 +512,12 @@ public:
         initialize_job_pointers();
         recv_over_socket(&indexes, sizeof(indexes));
         initialize_index_pointers();
-        printf("constructor works\n");
+        
     }
 
     ~client_queues_context()
     {
 	/* TODO terminate the server and release memory regions and other resources */
-        printf("enter destructor\n");
         kill();
         //need to release memory regions and other resources here    
         ibv_dereg_mr(mr_indexes);
@@ -546,7 +547,7 @@ public:
 
     void initialize_index_pointers()
     {
-        mr_indexes = ibv_reg_mr(pd, &indexes, sizeof(indexes) ,IBV_ACCESS_LOCAL_WRITE);
+        mr_indexes = ibv_reg_mr(pd, &indexes, sizeof(indexes) ,IBV_ACCESS_LOCAL_WRITE|IBV_ACCESS_REMOTE_READ);
         if (!mr_indexes) {
             perror("ibv_reg_mr() failed for indexes");
             exit(1);
@@ -571,6 +572,7 @@ public:
             perror("ibv_reg_mr() failed for output images");
             exit(1);
         }
+        images_out_addr = images_out;
     }
 
     virtual bool enqueue(int img_id, uchar *img_in, uchar *img_out) override
@@ -582,19 +584,22 @@ public:
         //reading _tail from remote
         readIndex(false);          // wr_id
        // printf("readIndex didnt failed\n");
-
+        //printf("enqueue\nindex parameters: tail: %d, head: %d, id %d\n", indexes.ctg_tail, indexes.ctg_head, img_id);
         //checks if queue is full
         if(indexes.ctg_tail - indexes.ctg_head == remote_info.number_of_slots)
             return false;
+        
 
         //copy img
         uchar * remote_img_in = (uchar *)remote_info.img_in_addr;
-        uchar * dst = &remote_img_in[img_id * IMG_SZ];
-        copyImg(indexes.ctg_tail, img_in, dst, true);
+        uchar * in_dst = &remote_img_in[(img_id%remote_info.number_of_slots) * IMG_SZ];
+        uchar * remote_img_out = (uchar *)remote_info.img_out_addr;
+        uchar * out_dst = &remote_img_out[(img_id%remote_info.number_of_slots) * IMG_SZ];
+        copyImg(indexes.ctg_tail, img_in, in_dst, true);
         //printf("copyImg didnt failed\n");
 
         //create a job
-        sending_job = {img_id, img_in, img_out};
+        sending_job = {img_id, in_dst, out_dst};
 
         //insert job to queue
         enqueueJob(indexes.ctg_tail, &sending_job);
@@ -607,7 +612,7 @@ public:
         return true;
     }
 
-    virtual bool dequeue(int *img_id) override
+    virtual bool dequeue(int *img_id) override 
     {
         /* TODO use RDMA Write and RDMA Read operations to detect the completion and dequeue a processed image
          * through a CPU-GPU producer consumer queue running on the server. */
@@ -616,21 +621,20 @@ public:
         //printf("entered dequeue\n");
         readIndex(true);          // wr_id
         //printf("readIndex didnt failed\n");
-
         //checks if queue is empty
         if(indexes.gtc_tail == indexes.gtc_head)
-            return false;
-
+        return false;
+        
         //dequeue a job and save it in recieved_job
         dequeueJob(indexes.gtc_head, &recieved_job);
         //printf("dequeueJob didnt failed\n");
         //copy img
+        //printf("dequeue\nindex parameters: tail: %d, head: %d, id %d\n", indexes.gtc_tail, indexes.gtc_head,recieved_job.img_id);
 
-        uchar * remote_img_out = (uchar *)remote_info.img_out_addr;
-        uchar * src = &remote_img_out[recieved_job.img_id * IMG_SZ];
-        copyImg(indexes.gtc_head, recieved_job.img_out, src, false);
+        copyImg(indexes.gtc_head,&images_out_addr[(recieved_job.img_id%N_IMAGES)* IMG_SZ], recieved_job.img_out ,false);
         //printf("copyIMG didnt failed\n");
 
+        *img_id = recieved_job.img_id;
         //increase _head index
         updateIndex(false);
         //printf("dequeue works\n");
@@ -653,17 +657,17 @@ public:
 
         if(tail)
         {
-            local_dst = &indexes.ctg_tail;
-            remote_src = remote_info.ctg_tail_addr;    // remote_src
-            rkey = remote_info.ctg_indexes_rkey;    // rkey
-            wr_id = indexes.ctg_tail;
+            local_dst = &indexes.gtc_tail;
+            remote_src = remote_info.gtc_tail_addr;    // remote_src
+            rkey = remote_info.gtc_indexes_rkey;    // rkey
+            wr_id = indexes.gtc_tail;
         }
         else
         {
-            local_dst = &indexes.gtc_head;
-            remote_src = remote_info.gtc_head_addr;    // remote_src
-            rkey = remote_info.gtc_indexes_rkey;    // rkey
-            wr_id = indexes.gtc_head;
+            local_dst = &indexes.ctg_head;
+            remote_src = remote_info.ctg_head_addr;    // remote_src
+            rkey = remote_info.ctg_indexes_rkey;    // rkey
+            wr_id = indexes.ctg_head;
         }
 
 
@@ -718,8 +722,9 @@ public:
             local_src = &indexes.gtc_head;
             remote_dst = remote_info.gtc_head_addr;    // remote_src
             rkey = remote_info.gtc_indexes_rkey;    // rkey
-            wr_id = indexes.gtc_head; 
+            wr_id = indexes.gtc_head+2000; 
         }
+
 
         post_rdma_write(
             remote_dst,                        // remote_dst
@@ -740,6 +745,7 @@ public:
             perror("ibv_poll_cq() failed");
             exit(1);
         }
+
         VERBS_WC_CHECK(wc);
         if(wc.opcode != IBV_WC_RDMA_WRITE)
         {
@@ -792,16 +798,26 @@ public:
             exit(1);
         }
         VERBS_WC_CHECK(wc);
-        if(cpy_cpu_to_gpu && wc.opcode != IBV_WC_RDMA_WRITE)
+        if(cpy_cpu_to_gpu)
         {
-            perror("write image failed");
-            exit(1);
+            if(wc.opcode != IBV_WC_RDMA_WRITE)
+            {
+                perror("write image failed");
+                exit(1);
+            }
+            return;
         }
-        if(!cpy_cpu_to_gpu && wc.opcode != IBV_WC_RDMA_READ)
+        if(!cpy_cpu_to_gpu)
         {
-            perror("read image failed");
-            exit(1);
+            if(wc.opcode != IBV_WC_RDMA_READ)
+            {
+                perror("read image failed");
+                exit(1);
+            }
+            return;
         }
+        perror("unexpected error");
+        exit(1);
     }
 
 
@@ -850,7 +866,25 @@ public:
             mr_recieved_job->lkey,                  // lkey
             remote_job_addr,              // remote_src
             remote_info.gtc_queue_rkey,            // rkey
-            index);                                   // wr_id
+            index); 
+            
+        struct ibv_wc wc; 
+        int ncqes = 0;
+        do{
+            ncqes = ibv_poll_cq(cq, 1, &wc);
+        }while(ncqes == 0);
+
+        if (ncqes < 0) 
+        {
+            perror("ibv_poll_cq() failed");
+            exit(1);
+        }
+        VERBS_WC_CHECK(wc);
+        if( wc.opcode != IBV_WC_RDMA_READ)
+        {
+            perror("dequeue job failed");
+            exit(1);
+        }                                  // wr_id
     }
 
     void sendTermination()
