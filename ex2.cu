@@ -123,8 +123,7 @@ __device__
 __device__ void process_image(uchar *in, uchar *out, uchar* maps) 
 {
    __shared__ int cdf[N_BINS];
-    //printf("1");
-    //int image_start = IMG_WIDTH * IMG_HEIGHT * blockIdx.x;
+
     int map_start = TILE_COUNT * TILE_COUNT * N_BINS * blockIdx.x;
     for(int t_row = 0; t_row< TILE_COUNT; ++t_row)
     {

@@ -363,7 +363,6 @@ public:
         }
         //have to assign a memory region to the jobs.
 
-       // printf("2nd job %x", &cpu_to_gpu_q->jobs[1]);
         rdma_server_info.img_in_rkey = mr_images_in->rkey;
         rdma_server_info.img_in_addr = (uintptr_t)images_in;
         rdma_server_info.img_out_rkey = mr_images_out->rkey;
@@ -408,7 +407,8 @@ public:
         /* TODO destroy the additional server MRs here */
         ibv_dereg_mr(mr_cpu_to_gpu_q);
         ibv_dereg_mr(mr_gpu_to_cpu_q);
-
+        ibv_dereg_mr(mr_gtc_indexes);
+        ibv_dereg_mr(mr_ctg_indexes);
     }
 
     void event_loop() override
@@ -442,7 +442,7 @@ public:
                         req = &requests[wc.wr_id];
 
                         /* Terminate signal */
-                        if (req->request_id == -1)
+                        if (req->request_id == KILLING_JOB)
                         {
                             printf("Terminating...\n");
                             terminate = true;
@@ -452,8 +452,8 @@ public:
                                 req->output_rkey,                       // rkey
                                 0,                // local_src
                                 mr_images_out->lkey,                    // lkey
-                                KILLING_JOB, // wr_id
-                                (uint32_t*)&req->request_id);           // immediate
+                                (uint64_t)KILLING_JOB, // wr_id
+                                (uint32_t *)&req->request_id);           // immediate
                         }
                         else
                         {
@@ -517,7 +517,7 @@ public:
 
     ~client_queues_context()
     {
-	/* TODO terminate the server and release memory regions and other resources */
+	    /* TODO terminate the server and release memory regions and other resources */
         kill();
         //need to release memory regions and other resources here    
         ibv_dereg_mr(mr_indexes);
@@ -580,11 +580,9 @@ public:
         /* TODO use RDMA Write and RDMA Read operations to enqueue the task on
          * a CPU-GPU producer consumer queue running on the server. */
         
-        // printf("entered enqueue\n");
-        //reading _tail from remote
+\        //reading _tail from remote
         readIndex(false);          // wr_id
-       // printf("readIndex didnt failed\n");
-        //printf("enqueue\nindex parameters: tail: %d, head: %d, id %d\n", indexes.ctg_tail, indexes.ctg_head, img_id);
+     
         //checks if queue is full
         if(indexes.ctg_tail - indexes.ctg_head == remote_info.number_of_slots)
             return false;
@@ -596,19 +594,16 @@ public:
         uchar * remote_img_out = (uchar *)remote_info.img_out_addr;
         uchar * out_dst = &remote_img_out[(img_id%remote_info.number_of_slots) * IMG_SZ];
         copyImg(indexes.ctg_tail, img_in, in_dst, true);
-        //printf("copyImg didnt failed\n");
 
         //create a job
         sending_job = {img_id, in_dst, out_dst};
 
         //insert job to queue
         enqueueJob(indexes.ctg_tail, &sending_job);
-        //printf("enqueueJob didnt failed\n");
 
         //increase _tail index
         updateIndex(true);
 
-        //printf("enqueue works\n");
         return true;
     }
 
@@ -618,26 +613,21 @@ public:
          * through a CPU-GPU producer consumer queue running on the server. */
         //reading head from remote
 
-        //printf("entered dequeue\n");
         readIndex(true);          // wr_id
-        //printf("readIndex didnt failed\n");
         //checks if queue is empty
         if(indexes.gtc_tail == indexes.gtc_head)
         return false;
         
         //dequeue a job and save it in recieved_job
         dequeueJob(indexes.gtc_head, &recieved_job);
-        //printf("dequeueJob didnt failed\n");
         //copy img
-        //printf("dequeue\nindex parameters: tail: %d, head: %d, id %d\n", indexes.gtc_tail, indexes.gtc_head,recieved_job.img_id);
 
         copyImg(indexes.gtc_head,&images_out_addr[(recieved_job.img_id%N_IMAGES)* IMG_SZ], recieved_job.img_out ,false);
-        //printf("copyIMG didnt failed\n");
 
         *img_id = recieved_job.img_id;
         //increase _head index
         updateIndex(false);
-        //printf("dequeue works\n");
+
         return true;
     }
 
@@ -912,7 +902,7 @@ public:
 
         /* WQE */
         memset(&wr, 0, sizeof(struct ibv_send_wr));
-        wr.wr_id = KILLING_JOB; /* helps identify the WQE */
+        wr.wr_id = (uint64_t)KILLING_JOB; /* helps identify the WQE */
         wr.sg_list = &sg;
         wr.num_sge = 1;
         wr.opcode = IBV_WR_SEND;

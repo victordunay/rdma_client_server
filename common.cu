@@ -325,7 +325,6 @@ void rdma_context::post_rdma_write(uint64_t remote_dst, uint32_t len, uint32_t r
     if (immediate) {
         send_wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
         send_wr.imm_data = *immediate;
-        printf("problem\n");
     } else {
         send_wr.opcode = IBV_WR_RDMA_WRITE;
     }
