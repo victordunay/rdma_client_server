@@ -1,4 +1,3 @@
-
 CC=nvcc
 
 DEBUG=0

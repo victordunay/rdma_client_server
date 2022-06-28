@@ -201,6 +201,7 @@ void rdma_context::connect_qp(const connection_establishment_data &remote_info)
     /* this is a multi-phase process, moving the state machine of the QP step by step
      * until we are ready */
     struct ibv_qp_attr qp_attr;
+
     /*QP state: RESET -> INIT */
     memset(&qp_attr, 0, sizeof(struct ibv_qp_attr));
     qp_attr.qp_state = IBV_QPS_INIT;
@@ -237,7 +238,6 @@ void rdma_context::connect_qp(const connection_establishment_data &remote_info)
     qp_attr.ah_attr.sl = 0;
     qp_attr.ah_attr.src_path_bits = 0;
     qp_attr.ah_attr.port_num = IB_PORT;
-    // error at this line ! 
     ret = ibv_modify_qp(qp, &qp_attr, IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN | IBV_QP_RQ_PSN | IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER);
     if (ret) {
         perror("ibv_modify_qp() to RTR failed");
@@ -350,6 +350,7 @@ rdma_server_context::rdma_server_context(uint16_t tcp_port) :
 
     /* Create a TCP connection to exchange InfiniBand parameters */
     tcp_connection();
+
     /* Open up some InfiniBand resources */
     initialize_verbs(IB_DEVICE_NAME_SERVER);
 

@@ -83,6 +83,7 @@ enum mode_enum {
 void parse_arguments(int argc, char **argv, enum mode_enum *mode, uint16_t *tcp_port);
 
 #define USE_ROCE
+
 /* Data to exchange between client and server for communication */
 struct connection_establishment_data {
 #ifdef USE_ROCE

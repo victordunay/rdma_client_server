@@ -444,7 +444,7 @@ public:
                         /* Terminate signal */
                         if (req->request_id == KILLING_JOB)
                         {
-                            printf("Terminating...\n");
+                            //printf("Terminating...\n");
                             terminate = true;
                             post_rdma_write(
                                 req->output_addr,                       // remote_dst
@@ -930,7 +930,6 @@ public:
 
         switch (wc.opcode) {
         case IBV_WC_SEND:
-            printf("Termination send\n");
             return false;
         case IBV_WC_RECV_RDMA_WITH_IMM:
             *img_id = wc.imm_data;
